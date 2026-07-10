@@ -137,7 +137,7 @@ class DocParser:
             from google.genai import types
             
             response = self.llm_orchestrator.gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-2.0-flash",
                 contents=[
                     types.Part.from_bytes(
                         data=file_content,

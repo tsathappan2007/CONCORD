@@ -18,6 +18,9 @@ class ConstraintsSubmit(BaseModel):
     raw_text: str
     structured_constraints: Dict[str, Any]
 
+class ReadySubmit(BaseModel):
+    role: str
+
 async def run_negotiation_loop(session_id: str):
     """Background task to run the turn-taking loop with visual delay."""
     engine = NegotiationEngine()
@@ -40,7 +43,26 @@ async def run_negotiation_loop(session_id: str):
                 
             await asyncio.sleep(4) # Visual delay for live watchers
         except Exception as e:
-            logger.error(f"Error in background negotiation loop: {e}")
+            error_msg = str(e)
+            logger.error(f"Error in background negotiation loop: {error_msg}")
+            try:
+                supabase = get_supabase_admin()
+                session_data = supabase.table("negotiation_sessions").select("round_count").eq("id", session_id).execute().data
+                round_num = session_data[0]["round_count"] if session_data else 1
+                
+                supabase.table("negotiation_logs").insert({
+                    "session_id": session_id,
+                    "round": round_num,
+                    "sender": "system",
+                    "tool_called": "system_end",
+                    "reasoning": f"Negotiation interrupted: {error_msg}. Please check your LLM API keys in .env."
+                }).execute()
+                
+                supabase.table("negotiation_sessions").update({
+                    "status": "draft"
+                }).eq("id", session_id).execute()
+            except Exception as db_err:
+                logger.error(f"Failed to log background loop error to database: {db_err}")
             break
 
 @router.get("")
@@ -171,7 +193,7 @@ async def submit_constraints(
 @router.post("/{session_id}/ready")
 async def mark_ready(
     session_id: str,
-    role: str,
+    payload: ReadySubmit,
     background_tasks: BackgroundTasks,
     user: dict = Depends(verify_token)
 ) -> Dict[str, Any]:
@@ -185,16 +207,16 @@ async def mark_ready(
     session = sess_res.data[0]
     
     # Verify user owns the role
-    if role == "party_a" and session["party_a_id"] != user["id"]:
+    if payload.role == "party_a" and session["party_a_id"] != user["id"]:
         raise HTTPException(status_code=403, detail="Access denied")
-    if role == "party_b" and session["party_b_id"] != user["id"]:
+    if payload.role == "party_b" and session["party_b_id"] != user["id"]:
         raise HTTPException(status_code=403, detail="Access denied")
         
     try:
         # Update ready status
         supabase.table("party_constraints").update({
             "is_ready": True
-        }).eq("session_id", session_id).eq("role", role).execute()
+        }).eq("session_id", session_id).eq("role", payload.role).execute()
         
         # Check if BOTH are ready
         constraints = supabase.table("party_constraints").select("*").eq("session_id", session_id).execute().data
@@ -202,6 +224,10 @@ async def mark_ready(
         ready_count = sum(1 for c in constraints if c["is_ready"])
         
         if ready_count == 2:
+            # Clear any residual logs or agreed terms from previous runs on this session
+            supabase.table("agreed_terms").delete().eq("session_id", session_id).execute()
+            supabase.table("negotiation_logs").delete().eq("session_id", session_id).execute()
+            
             # Change status to negotiating, turn to party_a
             supabase.table("negotiation_sessions").update({
                 "status": "negotiating",

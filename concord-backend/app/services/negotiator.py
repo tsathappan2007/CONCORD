@@ -341,7 +341,7 @@ class NegotiationEngine:
                     "last_modified_by": role,
                     "version": agreed_terms[term]["version"] + 1,
                     "updated_at": datetime.utcnow().isoformat()
-                }).execute()
+                }, on_conflict="session_id,term").execute()
                 
         elif action.tool_called in ["propose_term", "counter_propose"] and action.term:
             term = action.term
@@ -356,7 +356,7 @@ class NegotiationEngine:
                 "last_modified_by": role,
                 "version": current_ver + 1,
                 "updated_at": datetime.utcnow().isoformat()
-            }).execute()
+            }, on_conflict="session_id,term").execute()
 
         elif action.tool_called == "escalate_to_mediator":
             term = action.stuck_on or action.term

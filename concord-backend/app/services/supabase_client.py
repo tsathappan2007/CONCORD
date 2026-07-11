@@ -41,4 +41,4 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
         }
     except Exception as e:
         logger.error(f"Auth token verification failed: {e}")
-        raise HTTPException(status_code=401, detail="Authentication failed or token expired")
+        raise HTTPException(status_code=401, detail=f"Authentication failed or token expired: {str(e)}")

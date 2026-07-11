@@ -1,7 +1,7 @@
 import io
 import logging
 from datetime import datetime
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any
 from docx import Document
 from docx.shared import Pt, Inches
 from reportlab.lib.pagesizes import letter
@@ -15,7 +15,7 @@ logger = logging.getLogger("concord")
 class ContractExporter:
     @staticmethod
     def generate_docx(session_title: str, agreed_terms: List[Dict[str, Any]], logs: List[Dict[str, Any]]) -> bytes:
-        """Generates a professional DOCX file of the agreement."""
+        """Generates a professional DOCX file of the negotiation log trail."""
         doc = Document()
         
         # Style layout
@@ -28,7 +28,7 @@ class ContractExporter:
         # Title
         p_title = doc.add_paragraph()
         p_title.alignment = 1 # Center
-        r_title = p_title.add_run("CONCORD AGREEMENT")
+        r_title = p_title.add_run("Talks of Negotiation")
         r_title.font.name = "Arial"
         r_title.font.size = Pt(22)
         r_title.bold = True
@@ -39,33 +39,12 @@ class ContractExporter:
         
         p_desc = doc.add_paragraph()
         p_desc.add_run(
-            "This document constitutes a binding agreement mediated and negotiated autonomously "
-            "using the CONCORD AI negotiation platform. The parties confirm that the terms listed below "
-            "represent their mutual agreement."
+            "This document logs the autonomous negotiation steps and justifications "
+            "exchanged between the parties' AI agents during the agreement creation process on CONCORD."
         ).italic = True
         
-        # Section 1: Agreed Terms
-        doc.add_heading("1. Agreed Terms", level=1)
-        table = doc.add_table(rows=1, cols=2)
-        table.style = "Light Shading Accent 1"
-        hdr_cells = table.rows[0].cells
-        hdr_cells[0].text = "Term"
-        hdr_cells[1].text = "Agreed Value"
-        
-        for item in agreed_terms:
-            row_cells = table.add_row().cells
-            row_cells[0].text = str(item["term"]).replace("_", " ").title()
-            row_cells[1].text = str(item["value"])
-
-        doc.add_paragraph() # Spacer
-        
-        # Section 2: Audit Trail
-        doc.add_heading("2. Audit Log & Negotiation Trail (Appendix)", level=1)
-        p_trail_intro = doc.add_paragraph()
-        p_trail_intro.add_run(
-            "The following audit log lists the autonomous negotiation steps and justifications "
-            "exchanged between the parties' AI agents during the agreement creation process."
-        ).italic = True
+        # Audit Trail
+        doc.add_heading("Negotiation Trail & Logs", level=1)
         
         for entry in logs:
             sender = str(entry["sender"]).upper()
@@ -83,8 +62,28 @@ class ContractExporter:
         return file_stream.getvalue()
 
     @staticmethod
-    def generate_pdf(session_title: str, agreed_terms: List[Dict[str, Any]], logs: List[Dict[str, Any]]) -> bytes:
-        """Generates a highly structured PDF file of the agreement."""
+    def get_party_details(supabase, user_id: str) -> dict:
+        """Helper to fetch party email, name and phone from Supabase Auth admin API."""
+        if not user_id:
+            return {"email": "Party B", "name": "Party B", "phone": "[Client Phone]"}
+            
+        try:
+            user_info = supabase.auth.admin.get_user_by_id(user_id)
+            user = user_info.user
+            metadata = user.user_metadata or {}
+            name = metadata.get("name") or metadata.get("full_name") or user.email or "Party"
+            phone = metadata.get("phone") or metadata.get("phone_number") or "[Phone Number]"
+            return {
+                "email": user.email or "",
+                "name": name,
+                "phone": phone
+            }
+        except Exception as e:
+            return {"email": "Party", "name": "Party", "phone": "[Phone Number]"}
+
+    @staticmethod
+    def generate_pdf(session_title: str, agreed_terms: List[Dict[str, Any]], party_a: dict, party_b: dict) -> bytes:
+        """Generates a PDF service agreement using a professional template."""
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(
             buffer, 
@@ -101,20 +100,20 @@ class ContractExporter:
             "DocTitle",
             parent=styles["Heading1"],
             fontName="Helvetica-Bold",
-            fontSize=22,
-            leading=26,
+            fontSize=24,
+            leading=28,
             alignment=1, # Center
-            spaceAfter=20
+            spaceAfter=25
         )
         h1_style = ParagraphStyle(
             "DocH1",
             parent=styles["Heading2"],
             fontName="Helvetica-Bold",
-            fontSize=14,
-            leading=18,
+            fontSize=11,
+            leading=14,
             spaceBefore=15,
-            spaceAfter=10,
-            textColor=colors.HexColor("#0f172a") # Slate-900
+            spaceAfter=8,
+            textColor=colors.black
         )
         body_style = ParagraphStyle(
             "DocBody",
@@ -122,93 +121,104 @@ class ContractExporter:
             fontName="Helvetica",
             fontSize=10,
             leading=14,
-            spaceAfter=8
-        )
-        meta_style = ParagraphStyle(
-            "DocMeta",
-            parent=styles["Normal"],
-            fontName="Helvetica-Oblique",
-            fontSize=9,
-            leading=12,
-            spaceAfter=10,
-            textColor=colors.HexColor("#475569") # Slate-600
-        )
-        log_style = ParagraphStyle(
-            "DocLog",
-            parent=styles["Normal"],
-            fontName="Helvetica",
-            fontSize=9,
-            leading=12,
-            spaceAfter=6
+            spaceAfter=12
         )
         
         story = []
         
-        # Header title
-        story.append(Paragraph("CONCORD FINAL AGREEMENT", title_style))
-        
-        # Meta info
-        story.append(Paragraph(f"<b>Session Title:</b> {session_title}", body_style))
-        story.append(Paragraph(f"<b>Date Concluded:</b> {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", body_style))
+        # 1. Main Title
+        story.append(Paragraph("SERVICE AGREEMENT", title_style))
         story.append(Spacer(1, 10))
         
-        intro_text = (
-            "This document constitutes a binding agreement negotiated autonomously through the CONCORD AI platform. "
-            "Both parties have reviewed the terms below and granted their electronic approvals."
+        # 2. Heading: PARTIES
+        story.append(Paragraph("<u><b>PARTIES</b></u>", h1_style))
+        
+        effective_date = datetime.utcnow().strftime('%B %d, %Y')
+        parties_text = (
+            f"This Service Contract Agreement (hereinafter referred to as the <b>\"Agreement\"</b>) is entered into "
+            f"on <u>{effective_date}</u> (the <b>\"Effective Date\"</b>), by and between <u>{party_a['name']}</u> "
+            f"(Phone: <u>{party_a['phone']}</u>), with an address of <u>[Service Provider Address]</u> (hereinafter referred to as the <b>\"Service Provider\"</b>) "
+            f"and <u>{party_b['name']}</u> (Phone: <u>{party_b['phone']}</u>), with an address of <u>[Client Address]</u> (hereinafter referred to as the <b>\"Client\"</b>) "
+            f"(collectively referred to as the <b>\"Parties\"</b>)."
         )
-        story.append(Paragraph(intro_text, meta_style))
+        story.append(Paragraph(parties_text, body_style))
         story.append(Spacer(1, 10))
         
-        # Agreed Terms Table
-        story.append(Paragraph("1. Agreed Terms", h1_style))
+        # 3. Heading: LIST OF SERVICES PROVIDED AND THEIR PRICES
+        story.append(Paragraph("<u><b>LIST OF SERVICES PROVIDED AND THEIR PRICES</b></u>", h1_style))
         
-        table_data = [["Term Name", "Agreed Contract Value"]]
+        services_intro = (
+            "During the period of this Agreement, the Service Provider shall have the responsibility to "
+            "perform and provide the following services (hereinafter referred to as <b>\"Services\"</b>):"
+        )
+        story.append(Paragraph(services_intro, body_style))
+        
+        # List of terms
+        term_idx = 1
+        payment_days = "30"
         for item in agreed_terms:
             t_name = str(item["term"]).replace("_", " ").title()
             val = str(item["value"])
-            table_data.append([t_name, val])
             
-        t = Table(table_data, colWidths=[200, 300])
-        t.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e293b")), # Slate-800
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
-            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, 0), 10),
-            ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
-            ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#f8fafc")), # Slate-50
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")), # Slate-300
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
-            ("FONTSIZE", (0, 1), (-1, -1), 9),
-            ("TOPPADDING", (0, 0), (-1, -1), 6),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            # Check if this term specifies invoice payment days
+            if "payment" in item["term"].lower() or "days" in item["term"].lower() or "invoice" in item["term"].lower():
+                if val.isdigit():
+                    payment_days = val
+            
+            story.append(Paragraph(f"{term_idx}. {t_name} (Price/Value: {val})", body_style))
+            term_idx += 1
+            
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("The Services are to be paid for as follows:", body_style))
+        story.append(Paragraph("Amount at signing of this Agreement: [As negotiated / See terms above]", body_style))
+        story.append(Paragraph("Amount at the completion of the provision of the Services: [As negotiated / See terms above]", body_style))
+        story.append(Spacer(1, 10))
+        
+        # 4. Heading: INVOICES
+        story.append(Paragraph("<u><b>INVOICES</b></u>", h1_style))
+        invoices_text = (
+            f"The Parties agree that the invoiced amounts must be paid within <u>{payment_days}</u> days after "
+            f"the Client receives the invoice."
+        )
+        story.append(Paragraph(invoices_text, body_style))
+        story.append(Spacer(1, 10))
+        
+        # 5. Heading: TERM OF AGREEMENT
+        story.append(Paragraph("<u><b>TERM OF AGREEMENT</b></u>", h1_style))
+        term_text = (
+            "This Agreement shall commence on the Effective Date and shall remain in effect until the completion of "
+            "the Services or as otherwise terminated in accordance with the terms of this Agreement."
+        )
+        story.append(Paragraph(term_text, body_style))
+        story.append(Spacer(1, 15))
+        
+        # 6. Signature panels
+        story.append(Paragraph("<b>IN WITNESS WHEREOF</b>, the Parties hereto have signed and executed this Agreement.", body_style))
+        story.append(Spacer(1, 10))
+        
+        sig_data = [
+            [
+                Paragraph(f"<b>Service Provider:</b><br/>{party_a['name']}<br/><br/>_______________________<br/>Authorized Signatory", body_style),
+                Paragraph(f"<b>Client:</b><br/>{party_b['name']}<br/><br/>_______________________<br/>Authorized Signatory", body_style)
+            ]
+        ]
+        sig_table = Table(sig_data, colWidths=[240, 240])
+        sig_table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
         ]))
+        story.append(sig_table)
         
-        story.append(t)
-        story.append(Spacer(1, 20))
-        
-        # Appendix: Audit Trail
-        story.append(Paragraph("2. Negotiation Audit Log (Appendix)", h1_style))
-        story.append(Paragraph(
-            "The section below lists the turns, tools, and commercial justifications evaluated "
-            "by both parties' agents to reach the final compromise.",
-            meta_style
-        ))
-        
-        for entry in logs:
-            sender = str(entry["sender"]).upper()
-            tool = str(entry["tool_called"]).replace("_", " ").title()
-            term = f" on '{entry['term']}'" if entry["term"] else ""
-            reasoning = str(entry["reasoning"])
+        # Build document with page border decorator
+        def draw_agreement_border(canvas, doc_obj):
+            canvas.saveState()
+            canvas.setStrokeColor(colors.HexColor("#0ea5e9")) # Sky-500
+            canvas.setLineWidth(14) # Thick blue border
+            canvas.rect(20, 20, doc_obj.pagesize[0] - 40, doc_obj.pagesize[1] - 40)
+            canvas.restoreState()
             
-            story.append(Paragraph(
-                f"<b>{sender}</b> called <i>{tool}{term}</i>:<br/>{reasoning}", 
-                log_style
-            ))
-            story.append(Spacer(1, 4))
-            
-        doc.build(story)
+        doc.build(story, onFirstPage=draw_agreement_border, onLaterPages=draw_agreement_border)
         buffer.seek(0)
         return buffer.getvalue()
 
@@ -230,19 +240,28 @@ class ContractExporter:
         # Fetch logs
         logs = supabase.table("negotiation_logs").select("*").eq("session_id", session_id).order("created_at").execute().data
 
+        # Fetch profiles of Party A and Party B
+        try:
+            sess_data = supabase.table("negotiation_sessions").select("party_a_id, party_b_id").eq("id", session_id).execute().data[0]
+        except Exception as e:
+            logger.warning(f"Error fetching party ids for exporter: {e}")
+            sess_data = {}
+
+        party_a = cls.get_party_details(supabase, sess_data.get("party_a_id"))
+        party_b = cls.get_party_details(supabase, sess_data.get("party_b_id"))
+
         if format_type == "docx":
             file_bytes = cls.generate_docx(title, terms, logs)
-            file_name = f"concord_agreement_{session_id}.docx"
+            file_name = "Talks of Negotiation.docx"
             mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         else:
-            file_bytes = cls.generate_pdf(title, terms, logs)
+            file_bytes = cls.generate_pdf(title, terms, party_a, party_b)
             file_name = f"concord_agreement_{session_id}.pdf"
             mime_type = "application/pdf"
 
         # Upload to Supabase Storage bucket 'contracts'
         # Check bucket existence first or just try to upload
         try:
-            # Check if bucket exists, if not create it
             buckets = supabase.storage.list_buckets()
             if not any(b.name == "contracts" for b in buckets):
                 supabase.storage.create_bucket("contracts", options={"public": True})
@@ -258,7 +277,6 @@ class ContractExporter:
                 file_options={"content-type": mime_type, "x-upsert": "true"}
             )
         except Exception as e:
-            # If already exists, we overwrite it (upsert true handles it, but log errors)
             logger.debug(f"Bucket upload notice: {e}")
 
         # Get public url

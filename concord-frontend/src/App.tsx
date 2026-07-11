@@ -7,7 +7,9 @@ import SessionCreate from './pages/SessionCreate'
 import NegotiationRoom from './pages/NegotiationRoom'
 import ReviewApproval from './pages/ReviewApproval'
 import JoinSession from './pages/JoinSession'
+import ResetPassword from './pages/ResetPassword'
 import { RefreshCw } from 'lucide-react'
+import { GalaxyBackground } from './components/Galaxy/GalaxyBackground'
 
 const AppContent: React.FC = () => {
   const { user, loading } = useAuth()
@@ -53,6 +55,10 @@ const AppContent: React.FC = () => {
   }
 
   // 3. Authenticated paths
+  if (currentPath === '#/reset-password') {
+    return <ResetPassword navigate={navigate} />
+  }
+
   if (currentPath === '#/' || currentPath === '#/auth') {
     // Authenticated users shouldn't see landing/auth pages, redirect to dashboard
     navigate('#/dashboard')
@@ -82,7 +88,10 @@ const AppContent: React.FC = () => {
 const App: React.FC = () => {
   return (
     <AuthProvider>
-      <AppContent />
+      <div className="relative min-h-screen">
+        <GalaxyBackground />
+        <AppContent />
+      </div>
     </AuthProvider>
   )
 }

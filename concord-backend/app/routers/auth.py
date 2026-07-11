@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from app.services.supabase_client import verify_token, get_supabase_admin
 
 logger = logging.getLogger("concord")

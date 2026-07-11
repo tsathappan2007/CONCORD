@@ -53,10 +53,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     })
 
     // 2. Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, activeSession) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, activeSession) => {
       setSession(activeSession)
       setUser(activeSession?.user ?? null)
-      if (activeSession) {
+      if (event === 'PASSWORD_RECOVERY') {
+        window.location.hash = '#/reset-password'
+      } else if (activeSession) {
         syncProfile(activeSession)
       }
       setLoading(false)

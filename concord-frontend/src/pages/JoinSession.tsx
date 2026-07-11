@@ -58,7 +58,7 @@ const JoinSession: React.FC<JoinSessionProps> = ({ navigate }) => {
   }, [id, user, authLoading])
 
   return (
-    <div className="min-h-screen bg-background text-gray-100 flex justify-center items-center px-6">
+    <div className="min-h-screen bg-transparent text-gray-100 flex justify-center items-center px-6">
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}

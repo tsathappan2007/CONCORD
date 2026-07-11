@@ -4,7 +4,7 @@
 @layer base {
   body {
     margin: 0;
-    background-color: #0A0A0B;
+    background-color: #050505;
     color: #F3F4F6;
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
     -webkit-font-smoothing: antialiased;
@@ -18,7 +18,7 @@
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #0A0A0B;
+  background: #050505;
 }
 ::-webkit-scrollbar-thumb {
   background: #27272a;

@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react'
 import { useParams } from '../hooks/useParams' // Simple hash parameter hook
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../context/AuthContext'
-import { Upload, FileText, AlertTriangle, Plus, Trash2, Shield, Play } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Upload, FileText, AlertTriangle, Plus, Trash2, Shield, Play, LogOut, Eye } from 'lucide-react'
 
 interface SessionCreateProps {
   navigate: (path: string) => void
@@ -24,7 +25,7 @@ const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 const SessionCreate: React.FC<SessionCreateProps> = ({ navigate }) => {
   const { id } = useParams()
-  const { user } = useAuth()
+  const { user, session } = useAuth()
   
   const [sessionTitle, setSessionTitle] = useState('Loading session...')
   const [role, setRole] = useState<'party_a' | 'party_b'>('party_a')
@@ -35,6 +36,98 @@ const SessionCreate: React.FC<SessionCreateProps> = ({ navigate }) => {
   const [warningMsg, setWarningMsg] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
   const [forceOcr, setForceOcr] = useState(false)
+
+  const [supportingFiles, setSupportingFiles] = useState<any[]>([])
+  const [uploadingSupporting, setUploadingSupporting] = useState(false)
+
+  const fetchSupportingFiles = async () => {
+    if (!id || !session) return
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/sessions/${id}/supporting`, {
+        headers: {
+          'Authorization': `Bearer ${session?.access_token}`
+        }
+      })
+      if (!response.ok) throw new Error('Failed to fetch supporting docs')
+      const data = await response.json()
+      setSupportingFiles(data || [])
+    } catch (err) {
+      console.error('Failed to fetch supporting files:', err)
+    }
+  }
+
+  const handleUploadSupportingFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || !e.target.files[0] || !id || !session) return
+    const fileToUpload = e.target.files[0]
+    setUploadingSupporting(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', fileToUpload)
+      
+      const response = await fetch(`${apiBaseUrl}/api/v1/sessions/${id}/supporting`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session?.access_token}`
+        },
+        body: formData
+      })
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Upload failed')
+      }
+      fetchSupportingFiles()
+    } catch (err: any) {
+      console.error(err)
+      alert(err.message || 'Failed to upload supporting document.')
+    } finally {
+      setUploadingSupporting(false)
+    }
+  }
+
+  const handleDeleteSupportingFile = async (filename: string) => {
+    if (!id || !session) return
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/sessions/${id}/supporting/${encodeURIComponent(filename)}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${session?.access_token}`
+        }
+      })
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Delete failed')
+      }
+      fetchSupportingFiles()
+    } catch (err: any) {
+      console.error(err)
+      alert(err.message || 'Failed to delete supporting document.')
+    }
+  }
+
+  const handleDownloadSupportingFile = async (filename: string) => {
+    if (!id || !session) return
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/sessions/${id}/supporting/${encodeURIComponent(filename)}`, {
+        headers: {
+          'Authorization': `Bearer ${session?.access_token}`
+        }
+      })
+      if (!response.ok) throw new Error('Failed to get download URL')
+      const data = await response.json()
+      if (data && data.url) {
+        window.open(data.url, '_blank')
+      }
+    } catch (err: any) {
+      console.error(err)
+      alert(err.message || 'Failed to open document.')
+    }
+  }
+
+  // Progress modal states
+  const [showParsingModal, setShowParsingModal] = useState(false)
+  const [parsingStep, setParsingStep] = useState<'validating' | 'structuring' | 'finalizing' | 'success' | 'error'>('validating')
+  const [parsingProgress, setParsingProgress] = useState(0)
+  const [parsingError, setParsingError] = useState<string | null>(null)
 
   // Form State for Terms
   const [terms, setTerms] = useState<Term[]>([
@@ -67,6 +160,9 @@ const SessionCreate: React.FC<SessionCreateProps> = ({ navigate }) => {
       }
     }
     fetchSessionMeta()
+    if (id) {
+      fetchSupportingFiles()
+    }
   }, [id, user])
 
   // Drag and drop controls
@@ -111,10 +207,25 @@ const SessionCreate: React.FC<SessionCreateProps> = ({ navigate }) => {
 
   const parseAndExtract = async () => {
     if (!file || !user) return
+    
+    // Reset modal states
+    setShowParsingModal(true)
+    setParsingStep('validating')
+    setParsingProgress(5)
+    setParsingError(null)
     setUploading(true)
     setErrorMsg(null)
     setWarningMsg(null)
-    
+    setSuccessMsg(null)
+
+    // Start progress animation for validating phase (reaches max 45%)
+    const validatingInterval = setInterval(() => {
+      setParsingProgress((prev) => {
+        if (prev < 45) return prev + Math.floor(Math.random() * 4) + 1
+        return prev
+      })
+    }, 150)
+
     const formData = new FormData()
     formData.append('file', file)
     formData.append('force_ocr', forceOcr.toString())
@@ -128,28 +239,62 @@ const SessionCreate: React.FC<SessionCreateProps> = ({ navigate }) => {
         body: formData
       })
 
+      clearInterval(validatingInterval)
       const data = await response.json()
       if (!response.ok) {
         throw new Error(data.detail || 'Document validation failed.')
       }
 
-      setSuccessMsg(`✓ Document verified — ${data.word_count} words extracted`)
-      if (data.warning) {
-        setWarningMsg(data.warning)
-      }
+      setParsingProgress(50)
+      setParsingStep('structuring')
+
+      // Start progress animation for structuring phase (reaches max 90%)
+      const structuringInterval = setInterval(() => {
+        setParsingProgress((prev) => {
+          if (prev < 90) return prev + Math.floor(Math.random() * 3) + 1
+          return prev
+        })
+      }, 200)
 
       // Automatically extract candidate structured terms from text
-      await extractStructuredTerms(data.text)
+      const structureSuccess = await extractStructuredTerms(data.text)
+      
+      clearInterval(structuringInterval)
+      
+      if (!structureSuccess) {
+        throw new Error('AI analysis of contract terms failed.')
+      }
+
+      setParsingProgress(95)
+      setParsingStep('finalizing')
+      
+      setTimeout(() => {
+        setParsingProgress(100)
+        setParsingStep('success')
+        setSuccessMsg(`✓ Document verified — ${data.word_count} words extracted`)
+        if (data.warning) {
+          setWarningMsg(data.warning)
+        }
+        
+        // Auto close modal after a short delay
+        setTimeout(() => {
+          setShowParsingModal(false)
+          setUploading(false)
+        }, 1000)
+      }, 600)
 
     } catch (err: any) {
-      setErrorMsg(err.message || 'Parsing failed.')
+      clearInterval(validatingInterval)
+      const errMsg = err.message || 'Parsing failed.'
+      setParsingError(errMsg)
+      setParsingStep('error')
+      setErrorMsg(errMsg)
       setFile(null)
-    } finally {
       setUploading(false)
     }
   }
 
-  const extractStructuredTerms = async (extractedText: string) => {
+  const extractStructuredTerms = async (extractedText: string): Promise<boolean> => {
     try {
       const response = await fetch(`${apiBaseUrl}/api/v1/documents/structure`, {
         method: 'POST',
@@ -177,9 +322,12 @@ const SessionCreate: React.FC<SessionCreateProps> = ({ navigate }) => {
         if (newTerms.length > 0) {
           setTerms(newTerms)
         }
+        return true
       }
+      return false
     } catch (err) {
       console.error('Failed to extract structured candidate terms:', err)
+      return false
     }
   }
 
@@ -264,13 +412,18 @@ const SessionCreate: React.FC<SessionCreateProps> = ({ navigate }) => {
   }
 
   return (
-    <div className="min-h-screen bg-background text-gray-100 p-8 max-w-5xl mx-auto overflow-y-auto">
-      <header className="mb-10">
-        <button onClick={() => navigate('#/dashboard')} className="text-sm text-gray-400 hover:text-white mb-4 block">
-          &larr; Back to Dashboard
+    <div className="min-h-screen bg-transparent text-gray-100 p-8 max-w-5xl mx-auto overflow-y-auto">
+      <header className="mb-10 flex justify-between items-start">
+        <div>
+          <h1 className="text-3xl font-bold text-white truncate max-w-xl">{sessionTitle}</h1>
+          <p className="text-sm text-gray-400 mt-1">Configure your private negotiation parameters. These limits are only visible to your agent.</p>
+        </div>
+        <button
+          onClick={() => navigate('#/dashboard')}
+          className="px-4 py-2 bg-zinc-900 border border-borderLight hover:bg-zinc-800 text-xs font-semibold text-red-400 hover:text-red-300 rounded-xl flex items-center gap-1.5 transition duration-150 cursor-pointer"
+        >
+          <LogOut size={12} className="rotate-180 text-red-400" /> Exit Setup
         </button>
-        <h1 className="text-3xl font-bold text-white truncate max-w-xl">{sessionTitle}</h1>
-        <p className="text-sm text-gray-400 mt-1">Configure your private negotiation parameters. These limits are only visible to your agent.</p>
       </header>
 
       {errorMsg && (
@@ -299,42 +452,78 @@ const SessionCreate: React.FC<SessionCreateProps> = ({ navigate }) => {
           <div className="p-6 rounded-2xl bg-panel border border-borderLight">
             <h3 className="text-md font-bold text-white mb-4">1. Document Upload</h3>
             
-            <div
-              onDragOver={handleDrag}
-              onDragLeave={handleDrag}
-              onDrop={handleDrop}
-              className="border-2 border-dashed border-zinc-800 hover:border-accent rounded-xl p-8 text-center cursor-pointer transition duration-150"
-              onClick={() => document.getElementById('file-picker')?.click()}
-            >
-              <Upload className="mx-auto w-10 h-10 text-gray-500 mb-4 animate-bounce" />
-              <div className="text-sm text-gray-300 font-medium">Click or Drag Contract</div>
-              <div className="text-xs text-gray-500 mt-2">Supports PDF, DOCX, TXT (10MB max)</div>
-              
-              <input
-                id="file-picker"
-                type="file"
-                className="hidden"
-                accept=".pdf,.docx,.txt"
-                onChange={handleFileChange}
-              />
+            <div className="relative min-h-[170px] flex items-center justify-center">
+              <AnimatePresence mode="wait">
+                {!file ? (
+                  <motion.div
+                    key="upload-dropzone"
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    transition={{ duration: 0.2 }}
+                    onDragOver={handleDrag}
+                    onDragLeave={handleDrag}
+                    onDrop={handleDrop}
+                    className="w-full border-2 border-dashed border-zinc-800 hover:border-accent rounded-xl p-8 text-center cursor-pointer transition duration-150"
+                    onClick={() => document.getElementById('file-picker')?.click()}
+                  >
+                    <Upload className="mx-auto w-10 h-10 text-gray-500 mb-4 animate-bounce" />
+                    <div className="text-sm text-gray-300 font-medium">Click or Drag Contract</div>
+                    <div className="text-xs text-gray-500 mt-2">Supports PDF, DOCX, TXT (10MB max)</div>
+                    
+                    <input
+                      id="file-picker"
+                      type="file"
+                      className="hidden"
+                      accept=".pdf,.docx,.txt"
+                      onChange={handleFileChange}
+                    />
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="file-details"
+                    initial={{ opacity: 0, scale: 1.05 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    transition={{ duration: 0.25 }}
+                    className="w-full border border-accent/30 bg-zinc-900/80 rounded-xl p-6 text-center space-y-4 shadow-lg flex flex-col justify-between"
+                  >
+                    <div className="flex flex-col items-center space-y-2">
+                      <div className="w-12 h-12 rounded-full bg-accent/15 flex items-center justify-center text-accent">
+                        <FileText size={24} />
+                      </div>
+                      <div className="text-sm font-semibold text-white truncate max-w-full px-4" title={file.name}>
+                        {file.name}
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        {(file.size / 1024 / 1024).toFixed(2)} MB
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setFile(null)
+                          setErrorMsg(null)
+                          setWarningMsg(null)
+                          setSuccessMsg(null)
+                        }}
+                        className="flex-1 py-2 bg-zinc-950 border border-borderLight hover:bg-zinc-900 text-xs font-semibold text-red-400 rounded-lg flex items-center justify-center gap-1 transition cursor-pointer"
+                      >
+                        <Trash2 size={12} /> Remove
+                      </button>
+                      <button
+                        onClick={parseAndExtract}
+                        disabled={uploading}
+                        className="flex-1 py-2 bg-accent hover:bg-accentHover disabled:bg-accent/50 text-xs font-semibold text-white rounded-lg flex items-center justify-center gap-1 transition cursor-pointer"
+                      >
+                        {uploading ? 'Parsing...' : 'Analyze'}
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
-
-            {file && (
-              <div className="mt-4 p-3 bg-zinc-900 border border-borderLight rounded-xl flex items-center justify-between">
-                <div className="flex items-center gap-2 truncate">
-                  <FileText className="w-4 h-4 text-accent" />
-                  <span className="text-xs text-white truncate max-w-[150px]">{file.name}</span>
-                </div>
-                <button
-                  onClick={parseAndExtract}
-                  disabled={uploading}
-                  className="px-3 py-1.5 bg-accent hover:bg-accentHover text-xs font-semibold text-white rounded-lg transition duration-150"
-                >
-                  {uploading ? 'Parsing...' : 'Analyze'}
-                </button>
-              </div>
-            )}
-
             <div className="mt-4 flex items-center gap-2">
               <input
                 id="ocr-toggle"
@@ -346,6 +535,60 @@ const SessionCreate: React.FC<SessionCreateProps> = ({ navigate }) => {
               <label htmlFor="ocr-toggle" className="text-xs text-gray-400 select-none cursor-pointer">
                 Enable Multimodal OCR (Scanned PDFs)
               </label>
+            </div>
+          </div>
+
+          {/* Supporting Documents Card */}
+          <div className="p-6 rounded-2xl bg-panel border border-borderLight">
+            <h3 className="text-md font-bold text-white mb-2">Supporting Documents</h3>
+            <p className="text-xs text-gray-400 mb-4">Upload extra files (briefs, specifications, schedules) for the counterparty to download.</p>
+            
+            <div className="space-y-4">
+              <label
+                className="w-full border border-dashed border-zinc-800 hover:border-accent rounded-xl p-4 text-center cursor-pointer transition duration-150 flex flex-col items-center justify-center gap-1.5"
+                onClick={() => document.getElementById('supporting-file-picker')?.click()}
+              >
+                <Upload size={16} className="text-gray-500" />
+                <span className="text-xs font-semibold text-gray-300">
+                  {uploadingSupporting ? 'Uploading...' : 'Click to Upload Supporting Doc'}
+                </span>
+                <input
+                  id="supporting-file-picker"
+                  type="file"
+                  className="hidden"
+                  onChange={handleUploadSupportingFile}
+                  disabled={uploadingSupporting}
+                />
+              </label>
+
+              {supportingFiles.length > 0 && (
+                <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                  {supportingFiles.map((f) => (
+                    <div key={f.name} className="p-2.5 rounded-lg bg-zinc-900 border border-borderLight/40 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2 truncate flex-grow">
+                        <FileText size={14} className="text-accent shrink-0" />
+                        <span className="text-xs font-medium text-white truncate" title={f.name}>{f.name}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          onClick={() => handleDownloadSupportingFile(f.name)}
+                          className="p-1 rounded bg-zinc-950 border border-borderLight hover:border-accent hover:text-accent text-gray-400 transition cursor-pointer"
+                          title="View Document"
+                        >
+                          <Eye size={12} />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteSupportingFile(f.name)}
+                          className="p-1 rounded bg-zinc-950 border border-borderLight hover:border-red-500/30 hover:text-red-400 text-gray-400 transition cursor-pointer"
+                          title="Delete Document"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -513,6 +756,87 @@ const SessionCreate: React.FC<SessionCreateProps> = ({ navigate }) => {
           </div>
         </div>
       </div>
+
+      {showParsingModal && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-md flex justify-center items-center p-4 z-50">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="w-full max-w-md p-8 bg-panel border border-borderLight rounded-2xl shadow-2xl text-center space-y-6"
+          >
+            {/* Spinning Loader / Success check / Error cross */}
+            <div className="flex justify-center">
+              {parsingStep === 'error' ? (
+                <div className="w-16 h-16 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-500">
+                  <AlertTriangle size={32} />
+                </div>
+              ) : parsingStep === 'success' ? (
+                <div className="w-16 h-16 rounded-full bg-success/15 border border-success/20 flex items-center justify-center text-success animate-bounce">
+                  <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+              ) : (
+                <div className="relative w-20 h-20">
+                  {/* Outer spinning ring */}
+                  <div className="absolute inset-0 border-4 border-zinc-800 border-t-accent rounded-full animate-spin"></div>
+                  {/* Inner breathing ring */}
+                  <div className="absolute inset-2 border-4 border-dashed border-zinc-700/60 rounded-full animate-pulse"></div>
+                  {/* Center percentage */}
+                  <div className="absolute inset-0 flex items-center justify-center text-sm font-bold text-gray-200">
+                    {parsingProgress}%
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-lg font-bold text-white">
+                {parsingStep === 'validating' && 'Reading Contract'}
+                {parsingStep === 'structuring' && 'Analyzing with AI'}
+                {parsingStep === 'finalizing' && 'Generating Fields'}
+                {parsingStep === 'success' && 'Analysis Completed!'}
+                {parsingStep === 'error' && 'Analysis Failed'}
+              </h3>
+              <p className="text-xs text-gray-400 max-w-xs mx-auto leading-relaxed">
+                {parsingStep === 'validating' && 'Uploading document & validating structure...'}
+                {parsingStep === 'structuring' && 'Identifying commercial clauses and key term candidates...'}
+                {parsingStep === 'finalizing' && 'Mapping values, priorities, and boundaries to constraint form...'}
+                {parsingStep === 'success' && 'Ready to review and save parameters!'}
+                {parsingStep === 'error' && (parsingError || 'An error occurred during analysis.')}
+              </p>
+            </div>
+
+            {/* Progress bar */}
+            {parsingStep !== 'error' && (
+              <div className="space-y-2">
+                <div className="h-2 w-full bg-zinc-950 rounded-full overflow-hidden border border-borderLight/30">
+                  <div
+                    className={`h-full transition-all duration-300 ${
+                      parsingStep === 'success' ? 'bg-success' : 'bg-accent'
+                    }`}
+                    style={{ width: `${parsingProgress}%` }}
+                  ></div>
+                </div>
+                <div className="flex justify-between text-[10px] text-gray-500">
+                  <span>Progress</span>
+                  <span>{parsingProgress}%</span>
+                </div>
+              </div>
+            )}
+
+            {/* Error Actions */}
+            {parsingStep === 'error' && (
+              <button
+                onClick={() => setShowParsingModal(false)}
+                className="w-full py-2.5 bg-zinc-900 border border-borderLight hover:bg-zinc-800 text-xs font-semibold text-white rounded-xl transition duration-150 cursor-pointer"
+              >
+                Close & Try Again
+              </button>
+            )}
+          </motion.div>
+        </div>
+      )}
     </div>
   )
 }

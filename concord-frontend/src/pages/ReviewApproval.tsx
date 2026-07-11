@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { useParams } from '../hooks/useParams'
 import { supabase } from '../context/AuthContext'
 import { useNegotiationStore } from '../store/negotiationStore'
-import { FileText, Download, CheckCircle, XCircle, RefreshCw } from 'lucide-react'
+import { FileText, Download, CheckCircle, XCircle, RefreshCw, LogOut } from 'lucide-react'
 
 interface ReviewApprovalProps {
   navigate: (path: string) => void
@@ -17,13 +17,7 @@ const ReviewApproval: React.FC<ReviewApprovalProps> = ({ navigate }) => {
   const [submitting, setSubmitting] = useState(false)
   const [exportUrls, setExportUrls] = useState<{ pdf_url?: string; docx_url?: string } | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (id) {
-      fetchSessionDetails(supabase, id)
-      fetchExportUrls()
-    }
-  }, [id])
+  const [hasApproved, setHasApproved] = useState(false)
 
   const fetchExportUrls = async () => {
     try {
@@ -40,6 +34,35 @@ const ReviewApproval: React.FC<ReviewApprovalProps> = ({ navigate }) => {
       console.error('Failed to retrieve export urls:', err)
     }
   }
+
+  const checkUserApproval = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.user || !id) return
+      
+      const { data } = await supabase
+        .from('agreement_versions')
+        .select('*')
+        .eq('session_id', id)
+        .eq('created_by', session.user.id)
+        .eq('status', 'draft')
+        .eq('version', 888)
+        
+      if (data && data.length > 0) {
+        setHasApproved(true)
+      }
+    } catch (err) {
+      console.error('Failed to check user approval:', err)
+    }
+  }
+
+  useEffect(() => {
+    if (id) {
+      fetchSessionDetails(supabase, id)
+      fetchExportUrls()
+      checkUserApproval()
+    }
+  }, [id])
 
   const handleApprove = async () => {
     setSubmitting(true)
@@ -58,7 +81,11 @@ const ReviewApproval: React.FC<ReviewApprovalProps> = ({ navigate }) => {
         throw new Error(data.detail || 'Approval failed.')
       }
 
-      setExportUrls({ pdf_url: data.pdf_url, docx_url: data.docx_url })
+      if (data.status === 'completed') {
+        setExportUrls({ pdf_url: data.pdf_url, docx_url: data.docx_url })
+      } else {
+        setHasApproved(true)
+      }
       fetchSessionDetails(supabase, id!)
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to submit approval.')
@@ -94,7 +121,7 @@ const ReviewApproval: React.FC<ReviewApprovalProps> = ({ navigate }) => {
 
   if (loading && !activeSession) {
     return (
-      <div className="min-h-screen bg-background text-gray-100 flex justify-center items-center">
+      <div className="min-h-screen bg-transparent text-gray-100 flex justify-center items-center">
         <div className="flex flex-col items-center gap-3">
           <RefreshCw className="w-8 h-8 text-accent animate-spin" />
           <span className="text-sm text-gray-400">Loading agreement details...</span>
@@ -105,7 +132,7 @@ const ReviewApproval: React.FC<ReviewApprovalProps> = ({ navigate }) => {
 
   if (!activeSession) {
     return (
-      <div className="min-h-screen bg-background text-gray-100 flex justify-center items-center">
+      <div className="min-h-screen bg-transparent text-gray-100 flex justify-center items-center">
         <div className="text-center">
           <h3 className="text-lg font-bold">Session Not Found</h3>
           <button onClick={() => navigate('#/dashboard')} className="mt-4 text-sm text-accent hover:underline">
@@ -117,20 +144,33 @@ const ReviewApproval: React.FC<ReviewApprovalProps> = ({ navigate }) => {
   }
 
   return (
-    <div className="min-h-screen bg-background text-gray-100 p-8 max-w-4xl mx-auto overflow-y-auto">
+    <div className="min-h-screen bg-transparent text-gray-100 p-8 max-w-4xl mx-auto overflow-y-auto">
       <header className="mb-10 flex justify-between items-start">
         <div>
-          <button onClick={() => navigate(`#/session/${id}/room`)} className="text-sm text-gray-400 hover:text-white mb-4 block">
+          <button onClick={() => navigate(`#/session/${id}/room`)} className="text-xs text-gray-400 hover:text-white mb-3 block cursor-pointer">
             &larr; Back to Room
           </button>
           <h1 className="text-3xl font-bold text-white">Final Agreement Review</h1>
           <p className="text-sm text-gray-400 mt-1">Review the negotiated contract terms and grant your approval to sign and close the session.</p>
         </div>
+        <button
+          onClick={() => navigate('#/dashboard')}
+          className="px-4 py-2 bg-zinc-900 border border-borderLight hover:bg-zinc-800 text-xs font-semibold text-red-400 hover:text-red-300 rounded-xl flex items-center gap-1.5 transition duration-150 cursor-pointer"
+        >
+          <LogOut size={12} className="rotate-180 text-red-400" /> Exit Review
+        </button>
       </header>
 
       {errorMsg && (
         <div className="p-4 mb-6 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
           {errorMsg}
+        </div>
+      )}
+
+      {hasApproved && activeSession.status === 'awaiting_approval' && (
+        <div className="p-4 mb-6 rounded-xl bg-accent/10 border border-accent/20 text-accent text-sm flex items-center gap-2">
+          <CheckCircle className="w-4 h-4 shrink-0 text-accent" />
+          <span>You have approved this agreement. Awaiting counterparty approval to finalize and generate signed PDF.</span>
         </div>
       )}
 
@@ -180,39 +220,65 @@ const ReviewApproval: React.FC<ReviewApprovalProps> = ({ navigate }) => {
         </div>
 
         {/* Export Files Download section */}
-        {exportUrls && (
-          <div className="p-4 rounded-xl bg-zinc-900/60 border border-borderLight flex flex-col sm:flex-row justify-between items-center gap-4">
-            <div className="flex items-center gap-2">
-              <FileText className="w-5 h-5 text-accent" />
-              <div className="text-left">
-                <div className="text-xs font-bold text-white">Generated Export Packages</div>
-                <div className="text-[10px] text-gray-500">Download the contract agreements in standard formats.</div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-4 border-t border-borderLight">
+          {/* Word document - Talks of Negotiation */}
+          <div className="p-5 rounded-xl bg-zinc-900/60 border border-borderLight flex flex-col justify-between space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 shrink-0">
+                <FileText size={20} />
+              </div>
+              <div className="text-left min-w-0">
+                <div className="text-xs font-bold text-white truncate">Talks of Negotiation</div>
+                <div className="text-[10px] text-gray-400 mt-1 leading-normal font-medium">
+                  Download the complete agent negotiation logs and audit trail in Word format.
+                </div>
               </div>
             </div>
-            <div className="flex gap-2">
-              {exportUrls.pdf_url && (
-                <a
-                  href={exportUrls.pdf_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-3 py-1.5 bg-zinc-900 border border-borderLight hover:bg-zinc-800 text-xs font-semibold text-white rounded-lg flex items-center gap-1.5 transition"
-                >
-                  <Download size={12} /> PDF Document
-                </a>
-              )}
-              {exportUrls.docx_url && (
-                <a
-                  href={exportUrls.docx_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-3 py-1.5 bg-zinc-900 border border-borderLight hover:bg-zinc-800 text-xs font-semibold text-white rounded-lg flex items-center gap-1.5 transition"
-                >
-                  <Download size={12} /> Word Document (DOCX)
-                </a>
-              )}
-            </div>
+            {exportUrls?.docx_url ? (
+              <a
+                href={exportUrls.docx_url}
+                target="_blank"
+                rel="noreferrer"
+                className="w-full py-2 bg-zinc-950 hover:bg-zinc-900 border border-borderLight text-xs font-semibold text-white rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer"
+              >
+                <Download size={12} /> Download Word Document
+              </a>
+            ) : (
+              <div className="text-center py-2 text-[10px] text-gray-500 italic">
+                Generating logs...
+              </div>
+            )}
           </div>
-        )}
+
+          {/* PDF document - Final signed agreement */}
+          <div className="p-5 rounded-xl bg-zinc-900/60 border border-borderLight flex flex-col justify-between space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-lg bg-success/15 border border-success/20 flex items-center justify-center text-success shrink-0">
+                <CheckCircle size={20} />
+              </div>
+              <div className="text-left min-w-0">
+                <div className="text-xs font-bold text-white truncate">Download Agreement</div>
+                <div className="text-[10px] text-gray-400 mt-1 leading-normal font-medium">
+                  Download the final legally binding signed agreement in secure PDF format.
+                </div>
+              </div>
+            </div>
+            {activeSession.status === 'completed' && exportUrls?.pdf_url ? (
+              <a
+                href={exportUrls.pdf_url}
+                target="_blank"
+                rel="noreferrer"
+                className="w-full py-2 bg-success hover:bg-success/80 text-xs font-semibold text-white rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer"
+              >
+                <Download size={12} /> Download PDF Agreement
+              </a>
+            ) : (
+              <div className="w-full py-2 bg-zinc-950/40 border border-dashed border-borderLight text-center text-[10px] font-semibold text-zinc-500 rounded-lg select-none">
+                Awaiting Counterparty Signature
+              </div>
+            )}
+          </div>
+        </div>
 
         {/* Signature panels */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 border-t border-borderLight pt-6">
@@ -234,21 +300,21 @@ const ReviewApproval: React.FC<ReviewApprovalProps> = ({ navigate }) => {
         </div>
 
         {/* Buttons */}
-        {activeSession.status === 'awaiting_approval' && (
+        {activeSession.status === 'awaiting_approval' && !hasApproved && (
           <div className="flex justify-end gap-3 pt-4">
             <button
               onClick={handleReject}
               disabled={submitting}
-              className="px-5 py-2.5 border border-red-500/20 hover:bg-red-500/5 text-xs font-semibold text-red-400 rounded-xl flex items-center gap-1.5 transition"
+              className="px-5 py-2.5 border border-red-500/20 hover:bg-red-500/5 text-xs font-semibold text-red-400 rounded-xl flex items-center gap-1.5 transition cursor-pointer"
             >
               <XCircle size={14} /> Reject Agreement
             </button>
             <button
               onClick={handleApprove}
               disabled={submitting}
-              className="px-5 py-2.5 bg-success hover:bg-success/80 text-xs font-bold text-white rounded-xl flex items-center gap-1.5 shadow-lg shadow-success/20 transition"
+              className="px-5 py-2.5 bg-success hover:bg-success/80 text-xs font-bold text-white rounded-xl flex items-center gap-1.5 shadow-lg shadow-success/20 transition cursor-pointer"
             >
-              {submitting ? 'Generating files...' : (
+              {submitting ? 'Signing...' : (
                 <>
                   <CheckCircle size={14} /> Approve & Sign
                 </>

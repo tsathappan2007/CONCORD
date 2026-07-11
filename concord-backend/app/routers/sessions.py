@@ -1,7 +1,7 @@
 import logging
 import asyncio
 from typing import Dict, Any, List
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File
 from pydantic import BaseModel
 from app.services.supabase_client import verify_token, get_supabase_admin
 from app.services.negotiator import NegotiationEngine
@@ -268,29 +268,76 @@ async def approve_session(session_id: str, user: dict = Depends(verify_token)) -
     if session["status"] != "awaiting_approval":
         raise HTTPException(status_code=400, detail="Session is not awaiting approval")
 
-    # Complete session status
+    # Check if this user has already approved
+    existing = supabase.table("agreement_versions").select("*")\
+        .eq("session_id", session_id)\
+        .eq("created_by", user["id"])\
+        .eq("status", "draft")\
+        .eq("version", 888)\
+        .execute()
+        
+    if existing.data:
+        return {
+            "status": "awaiting_approval",
+            "message": "You have already approved this agreement. Awaiting counterparty approval."
+        }
+
+    # Check if the other party has manually approved (version=888)
+    other_approvals = supabase.table("agreement_versions").select("*")\
+        .eq("session_id", session_id)\
+        .neq("created_by", user["id"])\
+        .eq("status", "draft")\
+        .eq("version", 888)\
+        .execute()
+
     try:
-        supabase.table("negotiation_sessions").update({
-            "status": "completed",
-            "current_turn": "none"
-        }).eq("id", session_id).execute()
-        
-        # Trigger Document exports to Supabase storage bucket
-        pdf_url = ContractExporter.export_and_upload(session_id, "pdf")
-        docx_url = ContractExporter.export_and_upload(session_id, "docx")
-        
-        # Insert as signed version in versions
-        supabase.table("agreement_versions").insert({
-            "session_id": session_id,
-            "version": 999, # Final code
-            "terms_snapshot": {},
-            "created_by": user["id"],
-            "status": "signed",
-            "pdf_url": pdf_url,
-            "docx_url": docx_url
-        }).execute()
-        
-        return {"status": "completed", "pdf_url": pdf_url, "docx_url": docx_url}
+        if other_approvals.data:
+            # Both parties have approved! Complete the session
+            supabase.table("negotiation_sessions").update({
+                "status": "completed",
+                "current_turn": "none"
+            }).eq("id", session_id).execute()
+            
+            # Generate the final PDF and docx
+            pdf_url = ContractExporter.export_and_upload(session_id, "pdf")
+            docx_url = ContractExporter.export_and_upload(session_id, "docx")
+            
+            # Insert final signed version
+            supabase.table("agreement_versions").insert({
+                "session_id": session_id,
+                "version": 999,
+                "terms_snapshot": {},
+                "created_by": user["id"],
+                "status": "signed",
+                "pdf_url": pdf_url,
+                "docx_url": docx_url
+            }).execute()
+            
+            return {
+                "status": "completed",
+                "message": "Agreement approved by both parties. Final files generated.",
+                "pdf_url": pdf_url,
+                "docx_url": docx_url
+            }
+        else:
+            # First party approval
+            # Generate docx talks of negotiation immediately so it can be downloaded
+            docx_url = ContractExporter.export_and_upload(session_id, "docx")
+            
+            # Insert a draft version to record this user's approval
+            supabase.table("agreement_versions").insert({
+                "session_id": session_id,
+                "version": 888,
+                "terms_snapshot": {},
+                "created_by": user["id"],
+                "status": "draft",
+                "docx_url": docx_url
+            }).execute()
+            
+            return {
+                "status": "awaiting_approval",
+                "message": "Your approval has been recorded. Awaiting counterparty approval."
+            }
     except Exception as e:
         logger.error(f"Failed to approve session: {e}")
         raise HTTPException(status_code=500, detail=f"Approval failed: {str(e)}")
@@ -331,3 +378,115 @@ async def get_export_urls(session_id: str, user: dict = Depends(verify_token)) -
             raise HTTPException(status_code=404, detail="Export files not found or session not completed")
             
     return res.data[0]
+
+@router.post("/{session_id}/supporting")
+async def upload_supporting_document(
+    session_id: str,
+    file: UploadFile = File(...),
+    user: dict = Depends(verify_token)
+) -> Dict[str, Any]:
+    """Uploads a supporting document for the session using admin privileges to bypass RLS."""
+    supabase = get_supabase_admin()
+    
+    # Check if session exists
+    sess_res = supabase.table("negotiation_sessions").select("*").eq("id", session_id).execute()
+    if not sess_res.data:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    try:
+        content = await file.read()
+        path = f"supporting/{session_id}/{file.filename}"
+        supabase.storage.from_("contracts").upload(
+            path=path,
+            file=content,
+            file_options={"cache-control": "3600", "upsert": "true"}
+        )
+        return {"success": True, "filename": file.filename}
+    except Exception as e:
+        logger.error(f"Failed to upload supporting document: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload document: {str(e)}")
+
+@router.get("/{session_id}/supporting")
+async def list_supporting_documents(
+    session_id: str,
+    user: dict = Depends(verify_token)
+) -> List[Dict[str, Any]]:
+    """Lists supporting documents for the session."""
+    supabase = get_supabase_admin()
+    try:
+        res = supabase.storage.from_("contracts").list(f"supporting/{session_id}")
+        return [{"name": item["name"], "id": item.get("id"), "metadata": item.get("metadata")} for item in res]
+    except Exception as e:
+        logger.error(f"Failed to list supporting documents: {e}")
+        return []
+
+@router.get("/{session_id}/supporting/{filename}")
+async def get_supporting_document(
+    session_id: str,
+    filename: str,
+    user: dict = Depends(verify_token)
+) -> Dict[str, Any]:
+    """Generates a temporary signed URL to view/download the supporting document."""
+    supabase = get_supabase_admin()
+    try:
+        path = f"supporting/{session_id}/{filename}"
+        res = supabase.storage.from_("contracts").create_signed_url(path, 3600)
+        if not res or "signedURL" not in res:
+            public_url = supabase.storage.from_("contracts").get_public_url(path)
+            return {"url": public_url}
+        return {"url": res["signedURL"]}
+    except Exception as e:
+        logger.error(f"Failed to generate signed URL for document: {e}")
+        try:
+            path = f"supporting/{session_id}/{filename}"
+            public_url = supabase.storage.from_("contracts").get_public_url(path)
+            return {"url": public_url}
+        except Exception:
+            raise HTTPException(status_code=500, detail="Failed to retrieve document URL")
+
+@router.delete("/{session_id}/supporting/{filename}")
+async def delete_supporting_document(
+    session_id: str,
+    filename: str,
+    user: dict = Depends(verify_token)
+) -> Dict[str, Any]:
+    """Deletes a supporting document for the session."""
+    supabase = get_supabase_admin()
+    
+    # Authorize: check if user is creator
+    sess_res = supabase.table("negotiation_sessions").select("*").eq("id", session_id).execute()
+    if not sess_res.data:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = sess_res.data[0]
+    if user["id"] != session.get("creator_id") and user["id"] != session.get("party_a_id"):
+        raise HTTPException(status_code=403, detail="Not authorized to delete supporting documents")
+        
+    try:
+        path = f"supporting/{session_id}/{filename}"
+        supabase.storage.from_("contracts").remove([path])
+        return {"success": True, "message": "Document deleted successfully"}
+    except Exception as e:
+        logger.error(f"Failed to delete supporting document: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete supporting document: {str(e)}")
+
+@router.delete("/{session_id}")
+async def delete_session(session_id: str, user: dict = Depends(verify_token)) -> Dict[str, Any]:
+    """Deletes a negotiation session and all associated data."""
+    supabase = get_supabase_admin()
+    
+    # Check if session exists
+    sess_res = supabase.table("negotiation_sessions").select("*").eq("id", session_id).execute()
+    if not sess_res.data:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = sess_res.data[0]
+    
+    # Authorize: user must be creator or part of the session
+    if user["id"] not in [session.get("creator_id"), session.get("party_a_id"), session.get("party_b_id")]:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this session")
+        
+    try:
+        supabase.table("negotiation_sessions").delete().eq("id", session_id).execute()
+        return {"success": True, "message": "Session deleted successfully"}
+    except Exception as e:
+        logger.error(f"Failed to delete session: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete session: {str(e)}")
